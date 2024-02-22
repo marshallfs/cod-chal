@@ -1,13 +1,23 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException
-from sqlalchemy import create_engine
+from starlette.responses import FileResponse
+from sqlalchemy import create_engine, text, select, func, and_
 import pandas as pd
 from typing import List
 import uvicorn
 import pymysql
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+DB_USER = os.getenv('DB_USER')
+DB_PASSWORD = os.getenv('DB_PASSWORD')
+DB_HOST = os.getenv('DB_HOST')
+DB_NAME = os.getenv('DB_NAME')
 
 app = FastAPI()
-engine = create_engine('mysql+pymysql://root:testroot@localhost/cod_chal')  # Conexion a Mysql
+#engine = create_engine('mysql+pymysql://test_user:testuser@localhost/cod_chal')  # Conexion a Mysql
+engine = create_engine(f'mysql+pymysql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}/{DB_NAME}')
 
 @app.get("/test")
 async def test():   #Funcion de prueba
@@ -67,6 +77,85 @@ async def batch_insert(data: List[dict], table_destination: str):
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"message": "Inserción por lotes exitosa"}
+
+#Para los endpoints de consulta, les hemos puesto el año como parametro para asegurar que puedan ser escogidos por el usuario
+
+@app.get("/metrics1-json/{year}")
+async def metrics1(year:int):
+    #query a correr según requerimiento
+    query = text("""
+        SELECT d.department, j.job, QUARTER(e.datetime) as quarter, COUNT(*) as hires
+        FROM hired_employees e
+        JOIN departments d ON e.department_id = d.id
+        JOIN jobs j ON e.job_id = j.id
+        WHERE YEAR(e.datetime) = :year
+        GROUP BY d.department, j.job, quarter
+        ORDER BY d.department, j.job;
+    """)
+    #ejecutar query y emitir resultado como json
+    with engine.connect() as connection:
+        result = connection.execute(query, {"year":year})
+        results_as_dict = result.mappings().all()
+        return {row['department'] + '-' + row['job']: {'Q' + str(row['quarter']): row['hires']} for row in results_as_dict}
+
+@app.get("/metrics2-json/{year}")
+async def metrics2(year:int):
+    #query a correr según requerimiento
+    query = text("""
+        SELECT d.department, COUNT(*) as hires
+        FROM hired_employees e
+        JOIN departments d ON e.department_id = d.id
+        WHERE YEAR(e.datetime) = :year
+        GROUP BY d.department
+        HAVING hires > (SELECT AVG(hires) FROM (SELECT COUNT(*) as hires FROM hired_employees WHERE YEAR(datetime) = :year GROUP BY department_id) as queryavg)
+        ORDER BY hires DESC
+    """)
+    #ejecutar query y emitir resultado como json
+    with engine.connect() as connection:
+        result = connection.execute(query, {"year":year})
+        results_as_dict = result.mappings().all()
+        return {row['department']: {'hires': row['hires']} for row in results_as_dict}
+    
+@app.get("/metrics1-tab/{year}")
+async def metrics1(year:int):
+    #query a correr según requerimiento
+    query = text("""
+        SELECT d.department, j.job, QUARTER(e.datetime) as quarter, COUNT(*) as hires
+        FROM hired_employees e
+        JOIN departments d ON e.department_id = d.id
+        JOIN jobs j ON e.job_id = j.id
+        WHERE YEAR(e.datetime) = :year
+        GROUP BY d.department, j.job, quarter
+        ORDER BY d.department, j.job;
+    """)
+    #ejecutar query y emitir resultado como csv
+    with engine.connect() as connection:
+        result = connection.execute(query, {"year":year})
+        df = pd.DataFrame(result, columns=['Department', 'Job', 'Quarter', 'Hires'])        
+        csv = df.to_csv('metrics1.csv',index=False)
+        fr = FileResponse('metrics1.csv', media_type='text/csv', filename='metrics1.csv')         
+        return fr   
+
+@app.get("/metrics2-tab/{year}")
+async def metrics2(year:int):
+    #query a correr según requerimiento
+    query = text("""
+        SELECT d.department, COUNT(*) as hires
+        FROM hired_employees e
+        JOIN departments d ON e.department_id = d.id
+        WHERE YEAR(e.datetime) = :year
+        GROUP BY d.department
+        HAVING hires > (SELECT AVG(hires) FROM (SELECT COUNT(*) as hires FROM hired_employees WHERE YEAR(datetime) = :year GROUP BY department_id) as queryavg)
+        ORDER BY hires DESC
+    """)
+    #ejecutar query y emitir resultado como csv
+    with engine.connect() as connection:
+        result = connection.execute(query, {"year":year})
+        df = pd.DataFrame(result, columns=['Department', 'Hires'])
+        df.to_csv('metrics2.csv', index=False)
+        fr = FileResponse('metrics2.csv', media_type='text/csv', filename='metrics2.csv')
+        return fr
+            
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
