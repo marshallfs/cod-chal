@@ -95,8 +95,15 @@ async def metrics1(year:int):
     #ejecutar query y emitir resultado como json
     with engine.connect() as connection:
         result = connection.execute(query, {"year":year})
-        results_as_dict = result.mappings().all()
-        return {row['department'] + '-' + row['job']: {'Q' + str(row['quarter']): row['hires']} for row in results_as_dict}
+        results_as_dict = result.mappings().all()        
+        output = {}
+        for row in results_as_dict:
+            if row['department'] not in output:
+                output[row['department']] = {}
+            if row['job'] not in output[row['department']]:
+                output[row['department']][row['job']] = {}
+            output[row['department']][row['job']]['Q' + str(row['quarter'])] = row['hires']
+        return output
 
 @app.get("/metrics2-json/{year}")
 async def metrics2(year:int):
@@ -113,8 +120,11 @@ async def metrics2(year:int):
     #ejecutar query y emitir resultado como json
     with engine.connect() as connection:
         result = connection.execute(query, {"year":year})
-        results_as_dict = result.mappings().all()
-        return {row['department']: {'hires': row['hires']} for row in results_as_dict}
+        results_as_dict = result.mappings().all()        
+        output = {"year": year, "data": {}}
+        for row in results_as_dict:
+            output["data"][row['department']] = {'hires': row['hires']}
+        return output
     
 @app.get("/metrics1-tab/{year}")
 async def metrics1(year:int):
